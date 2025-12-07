@@ -1,0 +1,52 @@
+name: Renew RouterOS SSL Certificate
+
+on:
+  schedule:
+    # 每60天的凌晨0点触发（UTC时间），对应北京时间上午8点。
+    - cron: '0 0 */60 * *'
+  workflow_dispatch: # 允许手动触发
+  push:
+    branches: [ main ]
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup ACME.sh
+        run: |
+          curl https://get.acme.sh | sh -s email=${{ github.actor }}@users.noreply.github.com
+          echo "$HOME/.acme.sh" >> $GITHUB_PATH
+
+      - name: Configure AliDNS
+        run: |
+          export Ali_Key="${{ secrets.ALIYUN_ACCESS_KEY_ID }}"
+          export Ali_Secret="${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}"
+          ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+          ~/.acme.sh/acme.sh --register-account -m ${{ github.actor }}@users.noreply.github.com
+
+      - name: Issue Certificate
+        run: |
+          export Ali_Key="${{ secrets.ALIYUN_ACCESS_KEY_ID }}"
+          export Ali_Secret="${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}"
+          ~/.acme.sh/acme.sh --issue --dns dns_ali -d ros.weijunl.com
+
+      - name: Install Certificate to Repo
+        run: |
+          ~/.acme.sh/acme.sh --install-cert -d ros.weijunl.com \
+            --cert-file cert.pem \
+            --key-file key.pem \
+            --fullchain-file fullchain.pem
+          # 生成一个时间戳文件，方便RouterOS判断证书是否更新
+          date > cert_last_updated.txt
+
+      - name: Commit and Push if Changed
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A
+          timestamp=$(date -u)
+          git commit -m "GitHub Actions Auto Renew: ${timestamp}" || exit 0
+          git push
